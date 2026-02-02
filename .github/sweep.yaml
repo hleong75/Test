@@ -1,0 +1,9 @@
+# Configuration du Maître pour une application de transport Elite
+rules:
+  - "Architecture : Utilise le pattern MVVM (Model-View-ViewModel)."
+  - "Qualité : Chaque classe doit avoir un test unitaire JUnit 4."
+  - "Transports : Utilise la bibliothèque 'OneBusAway GTFS' pour le parsing."
+  - "Carto : Utilise MapLibre Native SDK for Android."
+  - "Compatibilité : Ne dépasse jamais Java 8 et l'API Level 24."
+  - "Performance : L'importation GTFS doit se faire en arrière-plan via un Service."
+  - "Logs : Implémente Timber pour un logging propre."
