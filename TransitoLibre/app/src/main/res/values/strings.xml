@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Transito Libre</string>
+    <string name="search_hint">Rechercher un arrêt…</string>
+    <string name="my_location">Ma position</string>
+    <string name="stop_details">Détails de l\'arrêt</string>
+    <string name="next_departures">Prochains passages</string>
+    <string name="no_departures">Aucun passage prévu</string>
+    <string name="loading">Chargement…</string>
+    <string name="error_gps_disabled">GPS désactivé. Activez la localisation pour utiliser cette fonction.</string>
+    <string name="error_network">Erreur réseau. Vérifiez votre connexion.</string>
+    <string name="import_gtfs">Importer GTFS</string>
+    <string name="parsing_gtfs">Importation des données GTFS…</string>
+    <string name="parsing_complete">Import terminé avec succès</string>
+    <string name="parsing_error">Erreur lors de l\'import</string>
+    <string name="itinerary">Itinéraire</string>
+    <string name="departure">Départ</string>
+    <string name="arrival">Arrivée</string>
+    <string name="calculate_route">Calculer l\'itinéraire</string>
+    <string name="my_current_position">Ma position actuelle</string>
+    <string name="notification_channel_name">Import GTFS</string>
+    <string name="notification_channel_description">Notifications de progression de l\'import GTFS</string>
+</resources>

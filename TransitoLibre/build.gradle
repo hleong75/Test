@@ -1,0 +1,21 @@
+buildscript {
+    ext {
+        kotlin_version = '1.9.22'
+        room_version = '2.6.1'
+        lifecycle_version = '2.7.0'
+        work_version = '2.9.0'
+        maplibre_version = '11.0.0'
+        koin_version = '3.5.3'
+        retrofit_version = '2.9.0'
+    }
+}
+
+plugins {
+    id 'com.android.application' version '8.2.2' apply false
+    id 'org.jetbrains.kotlin.android' version '1.9.22' apply false
+    id 'com.google.devtools.ksp' version '1.9.22-1.0.17' apply false
+}
+
+task clean(type: Delete) {
+    delete rootProject.buildDir
+}
