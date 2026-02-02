@@ -21,6 +21,15 @@ class GtfsParser {
         fun onProgress(current: Int, total: Int, message: String)
     }
 
+    interface BatchInsertCallback {
+        suspend fun insertStopTimesBatch(batch: List<StopTime>)
+        suspend fun insertTripsBatch(batch: List<Trip>)
+    }
+
+    companion object {
+        const val BATCH_SIZE = 2000
+    }
+
     fun parseZip(inputStream: InputStream, listener: ProgressListener? = null): ParseResult {
         val agencies = mutableListOf<Agency>()
         val stops = mutableListOf<Stop>()
@@ -68,6 +77,61 @@ class GtfsParser {
         }
 
         return ParseResult(agencies, stops, routes, trips, stopTimes, calendars)
+    }
+
+    /**
+     * Streaming parser for large GTFS files - processes and inserts in batches
+     */
+    suspend fun parseZipStreaming(
+        inputStream: InputStream,
+        callback: BatchInsertCallback,
+        listener: ProgressListener? = null
+    ): ParseResult {
+        val agencies = mutableListOf<Agency>()
+        val stops = mutableListOf<Stop>()
+        val routes = mutableListOf<Route>()
+        val calendars = mutableListOf<Calendar>()
+
+        val totalFiles = 6
+        var processedFiles = 0
+
+        ZipInputStream(inputStream).use { zipStream ->
+            var entry = zipStream.nextEntry
+
+            while (entry != null) {
+                when (entry.name) {
+                    "agency.txt" -> {
+                        listener?.onProgress(++processedFiles, totalFiles, "Parsing agencies...")
+                        agencies.addAll(parseAgencies(zipStream))
+                    }
+                    "stops.txt" -> {
+                        listener?.onProgress(++processedFiles, totalFiles, "Parsing stops...")
+                        stops.addAll(parseStops(zipStream))
+                    }
+                    "routes.txt" -> {
+                        listener?.onProgress(++processedFiles, totalFiles, "Parsing routes...")
+                        routes.addAll(parseRoutes(zipStream))
+                    }
+                    "trips.txt" -> {
+                        listener?.onProgress(++processedFiles, totalFiles, "Parsing trips (streaming)...")
+                        parseTripsStreaming(zipStream, callback)
+                    }
+                    "stop_times.txt" -> {
+                        listener?.onProgress(++processedFiles, totalFiles, "Parsing stop times (streaming)...")
+                        parseStopTimesStreaming(zipStream, callback)
+                    }
+                    "calendar.txt" -> {
+                        listener?.onProgress(++processedFiles, totalFiles, "Parsing calendar...")
+                        calendars.addAll(parseCalendars(zipStream))
+                    }
+                }
+                zipStream.closeEntry()
+                entry = zipStream.nextEntry
+            }
+        }
+
+        // Return empty lists for trips and stopTimes since they were streamed directly
+        return ParseResult(agencies, stops, routes, emptyList(), emptyList(), calendars)
     }
 
     private fun parseAgencies(inputStream: InputStream): List<Agency> {
@@ -210,7 +274,10 @@ class GtfsParser {
         val headerMap = header.mapIndexed { index, name -> name.trim() to index }.toMap()
 
         var line = reader.readNext()
-        while (line != null) {
+        var count = 0
+        val maxRecords = 50000 // Limit for non-streaming mode to avoid OOM
+        
+        while (line != null && count < maxRecords) {
             try {
                 stopTimes.add(
                     StopTime(
@@ -226,10 +293,93 @@ class GtfsParser {
                         timepoint = getFieldValue(line, headerMap, "timepoint")?.toIntOrNull()
                     )
                 )
+                count++
             } catch (_: Exception) { }
             line = reader.readNext()
         }
         return stopTimes
+    }
+
+    private suspend fun parseStopTimesStreaming(inputStream: InputStream, callback: BatchInsertCallback) {
+        val reader = CSVReaderBuilder(InputStreamReader(inputStream))
+            .withSkipLines(0)
+            .build()
+
+        val header = reader.readNext() ?: return
+        val headerMap = header.mapIndexed { index, name -> name.trim() to index }.toMap()
+
+        val batch = mutableListOf<StopTime>()
+        var line = reader.readNext()
+        
+        while (line != null) {
+            try {
+                val stopTime = StopTime(
+                    tripId = getFieldValue(line, headerMap, "trip_id") ?: "",
+                    arrivalTime = getFieldValue(line, headerMap, "arrival_time") ?: "",
+                    departureTime = getFieldValue(line, headerMap, "departure_time"),
+                    stopId = getFieldValue(line, headerMap, "stop_id") ?: "",
+                    stopSequence = getFieldValue(line, headerMap, "stop_sequence")?.toIntOrNull() ?: 0,
+                    stopHeadsign = getFieldValue(line, headerMap, "stop_headsign"),
+                    pickupType = getFieldValue(line, headerMap, "pickup_type")?.toIntOrNull(),
+                    dropOffType = getFieldValue(line, headerMap, "drop_off_type")?.toIntOrNull(),
+                    shapeDistTraveled = getFieldValue(line, headerMap, "shape_dist_traveled")?.toDoubleOrNull(),
+                    timepoint = getFieldValue(line, headerMap, "timepoint")?.toIntOrNull()
+                )
+                batch.add(stopTime)
+                
+                if (batch.size >= BATCH_SIZE) {
+                    callback.insertStopTimesBatch(batch.toList())
+                    batch.clear()
+                }
+            } catch (_: Exception) { }
+            line = reader.readNext()
+        }
+        
+        // Insert remaining items
+        if (batch.isNotEmpty()) {
+            callback.insertStopTimesBatch(batch)
+        }
+    }
+
+    private suspend fun parseTripsStreaming(inputStream: InputStream, callback: BatchInsertCallback) {
+        val reader = CSVReaderBuilder(InputStreamReader(inputStream))
+            .withSkipLines(0)
+            .build()
+
+        val header = reader.readNext() ?: return
+        val headerMap = header.mapIndexed { index, name -> name.trim() to index }.toMap()
+
+        val batch = mutableListOf<Trip>()
+        var line = reader.readNext()
+        
+        while (line != null) {
+            try {
+                val trip = Trip(
+                    tripId = getFieldValue(line, headerMap, "trip_id") ?: "",
+                    routeId = getFieldValue(line, headerMap, "route_id") ?: "",
+                    serviceId = getFieldValue(line, headerMap, "service_id") ?: "",
+                    headsign = getFieldValue(line, headerMap, "trip_headsign"),
+                    shortName = getFieldValue(line, headerMap, "trip_short_name"),
+                    directionId = getFieldValue(line, headerMap, "direction_id")?.toIntOrNull(),
+                    blockId = getFieldValue(line, headerMap, "block_id"),
+                    shapeId = getFieldValue(line, headerMap, "shape_id"),
+                    wheelchairAccessible = getFieldValue(line, headerMap, "wheelchair_accessible")?.toIntOrNull(),
+                    bikesAllowed = getFieldValue(line, headerMap, "bikes_allowed")?.toIntOrNull()
+                )
+                batch.add(trip)
+                
+                if (batch.size >= BATCH_SIZE) {
+                    callback.insertTripsBatch(batch.toList())
+                    batch.clear()
+                }
+            } catch (_: Exception) { }
+            line = reader.readNext()
+        }
+        
+        // Insert remaining items
+        if (batch.isNotEmpty()) {
+            callback.insertTripsBatch(batch)
+        }
     }
 
     private fun parseCalendars(inputStream: InputStream): List<Calendar> {

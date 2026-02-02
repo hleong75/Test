@@ -9,6 +9,8 @@ import androidx.core.app.NotificationCompat
 import androidx.work.*
 import com.transitolibre.R
 import com.transitolibre.data.database.GtfsDatabase
+import com.transitolibre.data.entity.StopTime
+import com.transitolibre.data.entity.Trip
 import com.transitolibre.data.repository.GtfsRepository
 import com.transitolibre.parser.GtfsParser
 import kotlinx.coroutines.Dispatchers
@@ -39,6 +41,9 @@ class GtfsImportWorker(
     private val notificationManager =
         context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
+    private var stopTimesCount = 0
+    private var tripsCount = 0
+
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val fileUriString = inputData.getString(KEY_FILE_URI)
             ?: return@withContext Result.failure()
@@ -64,7 +69,7 @@ class GtfsImportWorker(
             updateNotification(5, "Suppression des anciennes données...")
             repository.clearAllData()
 
-            // Parse GTFS file
+            // Parse GTFS file using streaming for large files
             val parser = GtfsParser()
             val inputStream = context.contentResolver.openInputStream(fileUri)
                 ?: return@withContext Result.failure()
@@ -72,8 +77,27 @@ class GtfsImportWorker(
             setProgressAsync(workDataOf(KEY_PROGRESS to 10, KEY_MESSAGE to "Analyse du fichier GTFS..."))
             updateNotification(10, "Analyse du fichier GTFS...")
 
+            // Create batch insert callback
+            val batchCallback = object : GtfsParser.BatchInsertCallback {
+                override suspend fun insertStopTimesBatch(batch: List<StopTime>) {
+                    repository.insertStopTimes(batch)
+                    stopTimesCount += batch.size
+                    val progress = 70 + minOf(29, stopTimesCount / 10000)
+                    setProgressAsync(workDataOf(KEY_PROGRESS to progress, KEY_MESSAGE to "Horaires: $stopTimesCount lignes..."))
+                    updateNotification(progress, "Horaires: $stopTimesCount lignes...")
+                }
+
+                override suspend fun insertTripsBatch(batch: List<Trip>) {
+                    repository.insertTrips(batch)
+                    tripsCount += batch.size
+                    val progress = 60 + minOf(9, tripsCount / 1000)
+                    setProgressAsync(workDataOf(KEY_PROGRESS to progress, KEY_MESSAGE to "Trajets: $tripsCount lignes..."))
+                    updateNotification(progress, "Trajets: $tripsCount lignes...")
+                }
+            }
+
             val parseResult = inputStream.use {
-                parser.parseZip(it, object : GtfsParser.ProgressListener {
+                parser.parseZipStreaming(it, batchCallback, object : GtfsParser.ProgressListener {
                     override fun onProgress(current: Int, total: Int, message: String) {
                         val progress = 10 + (current * 40 / total)
                         setProgressAsync(workDataOf(KEY_PROGRESS to progress, KEY_MESSAGE to message))
@@ -82,44 +106,27 @@ class GtfsImportWorker(
                 })
             }
 
-            // Insert data into database
+            // Insert non-streaming data
             setProgressAsync(workDataOf(KEY_PROGRESS to 50, KEY_MESSAGE to "Insertion des agences..."))
             updateNotification(50, "Insertion des agences...")
             repository.insertAgencies(parseResult.agencies)
 
-            setProgressAsync(workDataOf(KEY_PROGRESS to 55, KEY_MESSAGE to "Insertion des arrêts..."))
-            updateNotification(55, "Insertion des arrêts...")
+            setProgressAsync(workDataOf(KEY_PROGRESS to 52, KEY_MESSAGE to "Insertion des arrêts..."))
+            updateNotification(52, "Insertion des arrêts...")
             repository.insertStops(parseResult.stops)
 
-            setProgressAsync(workDataOf(KEY_PROGRESS to 60, KEY_MESSAGE to "Insertion des lignes..."))
-            updateNotification(60, "Insertion des lignes...")
+            setProgressAsync(workDataOf(KEY_PROGRESS to 55, KEY_MESSAGE to "Insertion des lignes..."))
+            updateNotification(55, "Insertion des lignes...")
             repository.insertRoutes(parseResult.routes)
 
-            setProgressAsync(workDataOf(KEY_PROGRESS to 65, KEY_MESSAGE to "Insertion des calendriers..."))
-            updateNotification(65, "Insertion des calendriers...")
+            setProgressAsync(workDataOf(KEY_PROGRESS to 58, KEY_MESSAGE to "Insertion des calendriers..."))
+            updateNotification(58, "Insertion des calendriers...")
             repository.insertCalendars(parseResult.calendars)
 
-            setProgressAsync(workDataOf(KEY_PROGRESS to 70, KEY_MESSAGE to "Insertion des trajets..."))
-            updateNotification(70, "Insertion des trajets...")
-            // Insert trips in batches
-            parseResult.trips.chunked(1000).forEachIndexed { index, batch ->
-                repository.insertTrips(batch)
-                val progress = 70 + (index * 10 / (parseResult.trips.size / 1000 + 1))
-                setProgressAsync(workDataOf(KEY_PROGRESS to progress, KEY_MESSAGE to "Insertion des trajets..."))
-            }
-
-            setProgressAsync(workDataOf(KEY_PROGRESS to 80, KEY_MESSAGE to "Insertion des horaires..."))
-            updateNotification(80, "Insertion des horaires...")
-            // Insert stop times in larger batches for performance
-            parseResult.stopTimes.chunked(5000).forEachIndexed { index, batch ->
-                repository.insertStopTimes(batch)
-                val progress = 80 + (index * 19 / (parseResult.stopTimes.size / 5000 + 1))
-                setProgressAsync(workDataOf(KEY_PROGRESS to progress, KEY_MESSAGE to "Insertion des horaires..."))
-                updateNotification(progress, "Insertion des horaires (${index * 5000}/${parseResult.stopTimes.size})...")
-            }
+            // Trips and StopTimes were already inserted via streaming callback
 
             setProgressAsync(workDataOf(KEY_PROGRESS to 100, KEY_MESSAGE to "Import terminé!"))
-            updateNotification(100, "Import terminé!")
+            updateNotification(100, "Import terminé! $tripsCount trajets, $stopTimesCount horaires")
 
             Result.success()
         } catch (e: Exception) {
